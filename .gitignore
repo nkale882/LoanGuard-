@@ -5,5 +5,7 @@ __pycache__/
 loan_store/
 out/
 
-# Local audit HMAC key (keep separate from exported out/ artifacts).
+# Legacy project-local signing key; active key is stored outside this repository.
 .audit_signing_key
+
+# Legacy project-local key; active key is stored in user-local application data.

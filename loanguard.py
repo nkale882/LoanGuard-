@@ -9,7 +9,7 @@ Pipeline
   3. Verify policy claims and pre-screen applications.
   4. Gate proposed assistant actions with PolicyEngine.
   5. Seal and check the governance audit trail.
-  6. Generate compliance evidence and provenance.
+  6. Summarize demo evidence and record provenance.
 
 This educational demo uses Knowlytix GMS, ClaimVerifier, PolicyEngine, tracing, and compliance APIs. All policy and applicant records are synthetic.
 
@@ -35,7 +35,6 @@ import torch
 
 from knowlytix.core.config import GeometryConfig, TrainConfig
 from knowlytix.harness.governance.compliance import (
-    ComplianceEvidenceGenerator,
     ProvenanceRegistry,
     SnapshotManager,
 )
@@ -60,7 +59,9 @@ from knowlytix.knowledge.ingest import ingest_document
 from knowlytix.knowledge.store import GMSExpertStore
 
 HERE = Path(__file__).resolve().parent
-AUDIT_KEY_FILE = HERE / ".audit_signing_key"
+LEGACY_AUDIT_KEY_FILE = HERE / ".audit_signing_key"
+LOCAL_DATA_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "LoanGuard"
+AUDIT_KEY_FILE = LOCAL_DATA_DIR / "audit_signing.key"
 POLICY_MD = HERE / "loan_policy.md"
 STORE_DIR = HERE / "loan_store"
 OUT_DIR = HERE / "out"
@@ -68,19 +69,31 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def load_audit_signing_key() -> tuple[bytes, str]:
-    """Load a configured HMAC key or create a local demo key outside out/."""
+    """Load or create the local signing key outside the project and output folders."""
     configured = os.getenv("LOANGUARD_AUDIT_SIGNING_KEY")
     if configured:
-        return configured.encode("utf-8"), "LOANGUARD_AUDIT_SIGNING_KEY"
+        key = configured.encode("utf-8")
+        if len(key) < 32:
+            raise RuntimeError("LOANGUARD_AUDIT_SIGNING_KEY must contain at least 32 bytes.")
+        return key, "LOANGUARD_AUDIT_SIGNING_KEY"
+    LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if LEGACY_AUDIT_KEY_FILE.exists():
+        if AUDIT_KEY_FILE.exists():
+            if not hmac.compare_digest(LEGACY_AUDIT_KEY_FILE.read_bytes(), AUDIT_KEY_FILE.read_bytes()):
+                raise RuntimeError("Legacy and user-local audit keys differ; resolve securely before continuing.")
+            LEGACY_AUDIT_KEY_FILE.unlink()
+        else:
+            AUDIT_KEY_FILE.write_bytes(LEGACY_AUDIT_KEY_FILE.read_bytes())
+            LEGACY_AUDIT_KEY_FILE.unlink()
     if not AUDIT_KEY_FILE.exists():
         AUDIT_KEY_FILE.write_text(secrets.token_hex(32), encoding="ascii")
     try:
         key = bytes.fromhex(AUDIT_KEY_FILE.read_text(encoding="ascii").strip())
-    except ValueError as exc:
-        raise RuntimeError(f"Invalid audit signing key file: {AUDIT_KEY_FILE}") from exc
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("Invalid user-local audit signing key file.") from exc
     if len(key) < 32:
         raise RuntimeError("Audit signing key must contain at least 32 bytes.")
-    return key, str(AUDIT_KEY_FILE.name)
+    return key, str(AUDIT_KEY_FILE)
 
 
 def _manifest_payload(manifest: dict) -> bytes:
@@ -402,6 +415,33 @@ def release_decision(overall) -> str:
 
 
 # ---------------------------------------------------------------- 4. actions
+def build_demo_evidence_summary(*, decision: str, claim_passed: int,
+                                claim_total: int, action_allowed: int,
+                                action_blocked: int, route_matches: int,
+                                application_count: int, audit_entries: int,
+                                audit_chain_valid: bool, audit_manifest_valid: bool,
+                                tension_status: str) -> str:
+    """Summarize observed demo checks without implying compliance ratings."""
+    rate = claim_passed / claim_total if claim_total else 0.0
+    return f"""# LoanGuard demo evidence summary ? not a compliance assessment
+
+This report describes one run of a synthetic educational example. It is not a certification, legal opinion, production model evaluation, or loan decision.
+
+## Run observations
+
+- Assistant-reply claim checks: {claim_passed}/{claim_total} passed ({rate:.0%}). The test cohort includes deliberately false claims; this rate is not model accuracy or an Effective Challenge pass rate.
+- Final reply gate: `{decision}`.
+- Synthetic route-label agreement: {route_matches}/{application_count}. The labels and routing rules derive from the same demo rules, so this is a consistency check, not independent validation.
+- Action probes: {action_allowed} allowed and {action_blocked} blocked among four scripted probes; these are examples, not real-world policy violations.
+- Audit chain valid: `{audit_chain_valid}`; signed manifest valid: `{audit_manifest_valid}`; packets: {audit_entries}.
+- Tension calibration: `{tension_status}`. Contradiction/tension checks are unavailable when calibration is degenerate.
+
+## Scope and limits
+
+Applicant data and policy are synthetic. Geometric scores and thresholds are illustrative and are not validated for lending decisions. A human Loan Officer retains decision authority. This run is not an assessment of fairness, proxy effects, independent risk controls, model enforcement, or regulatory compliance.
+"""
+
+
 def build_policy_engine(store) -> PolicyEngine:
     rules = [
         PolicyRule(rule_id="LG-001", action="lookup_*",
@@ -609,33 +649,28 @@ def main() -> None:
     (OUT_DIR / "audit_manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8")
 
-    # 6. compliance + provenance
+    # 6. demo evidence summary + provenance (not a compliance assessment)
     i_after = snaps.take_snapshot("after_run", {
         "policy_doc": POLICY_MD.name, "decision": decision,
         "pass_rate": overall.pass_rate})
-    n_policy_violations = sum(1 for _, _, d, _ in action_results if not d.allowed)
-    pipeline_results = {
-        "models_trained": 1,  # we treat the calibrated GMS store as "the model"
-        "verification_pass_rate": overall.pass_rate,
-        "policy_violations": n_policy_violations,
-        "contract_violations": 0,
-        "spc_alerts": 0,
-        "tracing_enabled": True,
-        "snapshot_count": 2,
-        "audit_entries": len(packets),
-        # Mark assessments that this demo does not perform as incomplete.
-        "risk_assessment_done": False,
-        "fairness_checked": False,
-        "human_oversight_enabled": True,
-    }
-    package = ComplianceEvidenceGenerator().generate_package(pipeline_results)
-    (OUT_DIR / "compliance_package.md").write_text(package.to_markdown())
-    print(f"\n[6] compliance: {package.overall_status} "
-          f"(pass_rate {package.pass_rate():.0%}); "
-          f"snapshot diff: {snaps.compare(i_before, i_after)['summary']}")
-    for chk in package.checks:
-        if chk.status != "satisfied":
-            print(f"    - [{chk.regulation}] {chk.article}: {chk.status}")
+    audit_chain_valid = not verify_audit_chain(packets)
+    audit_manifest_valid = verify_audit_manifest(packets, manifest, key)
+    summary = build_demo_evidence_summary(
+        decision=decision,
+        claim_passed=sum(1 for v in overall.claim_verdicts if v.passed),
+        claim_total=len(overall.claim_verdicts),
+        action_allowed=sum(1 for _, _, d, _ in action_results if d.allowed),
+        action_blocked=sum(1 for _, _, d, _ in action_results if not d.allowed),
+        route_matches=route_matches, application_count=len(applications),
+        audit_entries=len(packets), audit_chain_valid=audit_chain_valid,
+        audit_manifest_valid=audit_manifest_valid,
+        tension_status=verifier.calibrated_thresholds.tension_status)
+    (OUT_DIR / "demo_evidence_summary.md").write_text(summary, encoding="utf-8")
+    stale_report = OUT_DIR / "compliance_package.md"
+    if stale_report.exists():
+        stale_report.unlink()
+    print(f"\n[6] demo evidence summary written; snapshot diff: "
+          f"{snaps.compare(i_before, i_after)['summary']}")
 
     reg = ProvenanceRegistry()
     reg.register(name=POLICY_MD.name, artifact_type="dataset", source="policy_team",
