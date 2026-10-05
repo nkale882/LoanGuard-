@@ -214,6 +214,7 @@ def build_verifier(store) -> ClaimVerifier:
     # Keep calibration provenance available to callers that configure a
     # LogicVerifier; never replace missing tension cuts with constants.
     verifier.calibrated_thresholds = thresholds
+    verifier.plausibility_interval = (boot.ci_low, boot.ci_hi)
     return verifier
 
 
@@ -389,10 +390,15 @@ def screen_application(store, verifier, row):
 
 # --------------------------------------------------------------- claim verification
 def release_decision(overall) -> str:
-    """Per-claim policy: any error/critical failure blocks the whole reply."""
+    """Fail closed on errors and on non-exact facts from weak geodesic fallback."""
     bad = [v for v in overall.claim_verdicts
            if not v.passed and v.severity in ("error", "critical")]
-    return "BLOCK_AND_ESCALATE_TO_HUMAN" if bad else "RELEASE"
+    weak_geometric_facts = [
+        v for v in overall.claim_verdicts
+        if v.claim.type == ClaimType.FACT
+        and "exact graph match" not in str(v.evidence).casefold()
+    ]
+    return "BLOCK_AND_ESCALATE_TO_HUMAN" if bad or weak_geometric_facts else "RELEASE"
 
 
 # ---------------------------------------------------------------- 4. actions
@@ -449,7 +455,7 @@ def main() -> None:
     route_matches = sum(result["routing"] == expected_routes[result["applicant_id"]]
                         for result in screen_results)
     print(f"\n[3] application routing: {route_matches}/{len(applications)} "
-          "match the illustrative labels; all require human review")
+          "match CSV labels (consistency check only; labels use the same screen rules)")
     for result in screen_results:
         print(f"    {result['applicant_id']}: {result['routing']}; "
               f"income verification required={result['income_verification_required']}")
@@ -478,11 +484,29 @@ def main() -> None:
         pass_rate=(n_passed / n_total if n_total else 1.0),
         severity_distribution=severity_distribution,
     )
+    verification_notes = {}
+    interval_low, interval_high = verifier.plausibility_interval
     for v in overall.claim_verdicts:
         exp = expected.get(id(v.claim))
         note = "" if exp is None or exp == v.passed else "  <-- differs from expected"
+        if "Entity not found:" in str(v.evidence):
+            evidence_note = "UNKNOWN_ENTITY_FAIL_CLOSED; this is not a detected contradiction"
+        elif v.gms_method == "score_triple" and v.raw_signal is not None:
+            if interval_low <= v.raw_signal <= interval_high:
+                evidence_note = ("BORDERLINE_GEODESIC_WITHIN_95_PERCENT_BOOTSTRAP_INTERVAL; "
+                                 "not a robust contradiction")
+            else:
+                evidence_note = "GEODESIC_SIGNAL_ONLY; calibration is weak"
+        elif "exact graph match" in str(v.evidence).casefold():
+            evidence_note = "exact graph match"
+        elif v.passed:
+            evidence_note = "entity match; not independent calibration evidence"
+        else:
+            evidence_note = "typed policy comparison"
+        verification_notes[id(v.claim)] = evidence_note
         print(f"    [{'+' if v.passed else 'X'}] {v.claim.type.value:10s} "
               f"sev={v.severity:8s} score={v.score:.3f} | {v.claim.text}{note}")
+        print(f"        evidence classification: {evidence_note}")
     decision = release_decision(overall)
     print(f"    pass_rate={overall.pass_rate:.0%} "
           f"severity={overall.severity_distribution}  ->  {decision}")
@@ -515,8 +539,7 @@ def main() -> None:
             gms_scores={
                 "pass_confidence": float(v.score),
                 **({"geodesic_distance": float(v.raw_signal)}
-                   if v.raw_signal is not None and "geodesic" in
-                   f"{v.gms_method} {v.evidence}".casefold() else {}),
+                   if v.raw_signal is not None and v.gms_method == "score_triple" else {}),
             },
             gate_results={"verification": "PASS" if v.passed else "BLOCK"},
             execution_time_ms=claim_execution_ms.get(id(v.claim), 0.0),
@@ -527,10 +550,11 @@ def main() -> None:
             "method": v.gms_method,
             "raw_signal": v.raw_signal,
             "evidence": str(v.evidence)[:500],
+            "interpretation": verification_notes.get(id(v.claim), ""),
         }
         last_step, step = step, step + 1
     for action, a, d, action_elapsed_ms in action_results:
-        tracer.trace_tool_call(
+        packet = tracer.trace_tool_call(
             run_id=run_id, step_num=step, tool_name=action, args=a,
             result_summary=str(d.reason)[:200],
             policy_decision="allowed" if d.allowed else "blocked",
@@ -538,6 +562,7 @@ def main() -> None:
             gms_scores={}, gate_results={"policy": "PASS" if d.allowed else "BLOCK"},
             execution_time_ms=action_elapsed_ms,
             state_before="CLAIM_CHECKED", state_after="CLAIM_CHECKED")
+        packet.verification = {"not_applicable": True, "reason": "policy action gate"}
         last_step, step = step, step + 1
     tracer.end_run(run_id)
 
