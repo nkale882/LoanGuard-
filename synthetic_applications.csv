@@ -1,0 +1,13 @@
+﻿applicant_id,product,requested_amount,credit_score,annual_income,annual_debt,dti_percent,proposed_apr,marital_status,synthetic_outcome
+A-1001,Personal Loan,12000,712,78000,21000,26.9,16.99,Married,EligibleForUnderwriting
+A-1002,Personal Loan,28000,735,112000,30000,26.8,18.50,Single,ManualReview
+A-1003,Auto Loan,24500,625,64000,24000,37.5,12.99,Single,EligibleForUnderwriting
+A-1004,Auto Loan,64000,701,135000,42000,31.1,17.99,Married,ManualReview
+A-1005,Home Equity Line,90000,724,165000,52000,31.5,9.75,Divorced,EligibleForUnderwriting
+A-1006,Home Equity Line,45000,681,92000,38000,41.3,11.99,Married,ManualReview
+A-1007,Student Refinance Loan,52000,694,88000,28000,31.8,13.50,Single,EligibleForUnderwriting
+A-1008,Student Refinance Loan,32000,658,72000,23000,31.9,12.99,Single,ManualReview
+A-1009,Small Business Line,76000,708,190000,64000,33.7,15.50,Married,EligibleForUnderwriting
+A-1010,Small Business Line,115000,741,245000,80000,32.7,14.75,Single,ManualReview
+A-1011,Personal Loan,8000,638,51000,22000,43.1,21.99,Widowed,ManualReview
+A-1012,Auto Loan,18000,612,59000,18000,30.5,19.25,Divorced,ManualReview
