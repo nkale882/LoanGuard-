@@ -2,7 +2,7 @@
 
 A notebook-first educational example of applying Knowlytix governance components to a synthetic loan policy and sample application cohort. The deterministic path uses no hosted LLM. Optional Groq integration is isolated in notebook 03.
 
-> All policy text and applicant records in this project are synthetic. A route marked eligible means only that the application satisfies the demo's listed pre-screen thresholds and may proceed to human underwriting. This project does not approve, decline, price, or recommend real loans. A failed threshold is rejected from the automatic pass path and sent to manual review; missing or invalid inputs are marked REVIEW. Neither result is an automatic loan decline.
+> All policy text and applicant records in this project are synthetic. A route marked eligible means only that the application satisfies the demo's listed pre-screen thresholds and may proceed to human underwriting. This project does not approve, decline, price, or recommend real loans. A failed threshold is labeled REJECTED by the demo pre-screen; missing or invalid inputs are marked REVIEW. These screening labels are not final loan decisions; the policy names a human Loan Officer as approval authority.
 
 ## Project contents
 

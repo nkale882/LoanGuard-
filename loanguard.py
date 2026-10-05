@@ -381,8 +381,8 @@ def screen_application(store, verifier, row):
         screening_status = "REVIEW"
         screening_result = "REVIEW_REQUIRED"
     elif has_failure:
-        screening_status = "FAIL"
-        screening_result = "REJECTED_FROM_AUTO_PASS"
+        screening_status = "REJECTED"
+        screening_result = "REJECTED_BY_POLICY_SCREEN"
     else:
         screening_status = "PASS"
         screening_result = "PASSED_TO_UNDERWRITING"
@@ -395,7 +395,8 @@ def screen_application(store, verifier, row):
         "screening_status": screening_status,
         "screening_result": screening_result,
         "routing": ("POLICY_ELIGIBLE_FOR_UNDERWRITING"
-                    if screening_status == "PASS" else "MANUAL_REVIEW"),
+                    if screening_status == "PASS" else
+                    "PRE_SCREEN_REJECTED" if screening_status == "REJECTED" else "MANUAL_REVIEW"),
         "income_verification_required": income_result,
         "human_decision_required": True,
     }
@@ -490,6 +491,7 @@ def main() -> None:
         applications = list(csv.DictReader(handle))
     screen_results = [screen_application(store, verifier, row) for row in applications]
     expected_routes = {str(row["applicant_id"]): ({"EligibleForUnderwriting": "POLICY_ELIGIBLE_FOR_UNDERWRITING",
+                         "RejectedByPolicyScreen": "PRE_SCREEN_REJECTED",
                          "ManualReview": "MANUAL_REVIEW"}.get(row["synthetic_outcome"], row["synthetic_outcome"]))
                        for row in applications}
     route_matches = sum(result["routing"] == expected_routes[result["applicant_id"]]
